@@ -1,0 +1,14 @@
+{
+  "name": "web-scraper",
+  "version": "1.0.0",
+  "description": "Web scraping project using Playwright",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node test.js"
+  },
+  "dependencies": {
+    "playwright": "^1.53.0",
+    "xlsx": "^0.18.5"
+  }
+}
