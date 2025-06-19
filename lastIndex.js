@@ -2,19 +2,8 @@ const { chromium } = require("playwright");
 const { humanKeys, humanSleep } = require("./utils");
 const XLSX = require("xlsx");
 const fs = require("fs");
-const dotenv = require("dotenv");
-dotenv.config();
+
 const { jobTitles, payPeriodMap, states } = require("./constant");
-
-// Configuration
-const CONCURRENT_BROWSERS = process.env.CONCURRENT_BROWSERS || 3; // Number of browsers to run simultaneously
-const BROWSER_LAUNCH_DELAY = process.env.BROWSER_LAUNCH_DELAY || 2; // Delay between browser launches in seconds
-const MAX_RETRIES = 3; // Maximum retries per row
-
-// Global state to track which rows have been processed
-let processedRows = new Set();
-let currentRowIndex = 0;
-let allData = [];
 
 function getEmailFromExcel(filePath) {
   const workbook = XLSX.readFile(filePath);
@@ -23,18 +12,6 @@ function getEmailFromExcel(filePath) {
   const data = XLSX.utils.sheet_to_json(worksheet);
   // Assume the first row has the email field
   return data[0]?.email || "test@example.com";
-}
-
-// Function to get next available row
-function getNextRow() {
-  while (currentRowIndex < allData.length) {
-    if (!processedRows.has(currentRowIndex)) {
-      processedRows.add(currentRowIndex);
-      return { rowIndex: currentRowIndex, data: allData[currentRowIndex] };
-    }
-    currentRowIndex++;
-  }
-  return null; // No more rows to process
 }
 
 async function waitForAnySelector(page, selectors, options = {}) {
@@ -114,7 +91,7 @@ function formatPayDate(date) {
   return [mm, dd, yyyy];
 }
 
-async function scrapeWebsite(rowData = null) {
+async function scrapeWebsite() {
   let browser;
   let page;
 
@@ -123,31 +100,18 @@ async function scrapeWebsite(rowData = null) {
     browser = await chromium.launch({
       headless: false,
       timeout: 60000,
-      proxy: {
-        server: "http://5f9b95ac70ac9229.nbd.us.ip2world.vip:6001",
-        username: "rmz0708-zone-resi-region-us",
-        password: "5252552",
-      },
     });
 
     // Create a new page
     page = await browser.newPage();
     page.setDefaultNavigationTimeout(60000);
 
-    console.log(
-      `[Browser ${
-        rowData ? rowData.rowIndex + 1 : "Unknown"
-      }] Attempting to navigate to the website...`
-    );
-    await page.goto("https://vivapaydayloans.com/", {
-      waitUntil: "domcontentloaded",
+    console.log("Attempting to navigate to the website...");
+    await page.goto("https://offer.vivapaydayloans.com/?aff90131", {
+      waitUntil: "networkidle",
       timeout: 60000,
     });
-    console.log(
-      `[Browser ${
-        rowData ? rowData.rowIndex + 1 : "Unknown"
-      }] Successfully loaded the website`
-    );
+    console.log("Successfully loaded the website");
 
     // Wait for the apply button
     const applyBtn = await retryStep(
@@ -160,11 +124,7 @@ async function scrapeWebsite(rowData = null) {
       "wait for apply button"
     );
     await humanSleep(1);
-    console.log(
-      `[Browser ${
-        rowData ? rowData.rowIndex + 1 : "Unknown"
-      }] Clicking the apply button...`
-    );
+    console.log("Clicking the apply button...");
     await applyBtn.click({ force: true });
 
     // Wait for the iframe to appear
@@ -184,11 +144,8 @@ async function scrapeWebsite(rowData = null) {
     if (!frame) throw new Error("Could not get iframe content frame");
 
     // Now, do everything inside the iframe!
-    const email = rowData?.data?.email || getEmailFromExcel("data.xlsx");
-    console.log(
-      `[Browser ${rowData ? rowData.rowIndex + 1 : "Unknown"}] Filling email:`,
-      email
-    );
+    const email = getEmailFromExcel("data.xlsx");
+    console.log("Filling email:", email);
 
     const emailInput = await retryStep(
       () =>
@@ -203,14 +160,13 @@ async function scrapeWebsite(rowData = null) {
     await humanSleep(1);
     // Clear the input before typing
     await emailInput.fill("");
-    await emailInput.focus();
     await humanSleep(0.5);
     // Use humanKeys for human-like typing
     await humanKeys(emailInput, email);
     await humanSleep();
-    // Fallback: set value directly if field is still empty or incorrect
+    // Fallback: set value directly if field is still empty (for stubborn fields)
     const currentValue = await frame.evaluate((el) => el.value, emailInput);
-    if (currentValue !== email) {
+    if (!currentValue) {
       await frame.evaluate(
         (el, value) => {
           el.value = value;
@@ -226,21 +182,15 @@ async function scrapeWebsite(rowData = null) {
     // Wait 3 seconds for the next fields to appear
     await humanSleep(3);
 
-    // Use rowData if provided, otherwise read from Excel
-    const data =
-      rowData?.data ||
-      XLSX.utils.sheet_to_json(
-        XLSX.readFile("data.xlsx").Sheets[
-          XLSX.readFile("data.xlsx").SheetNames[0]
-        ]
-      )[0];
-
-    const firstName = data?.first || "John";
-    const lastName = data?.last || "Doe";
-    console.log(
-      `[Browser ${rowData ? rowData.rowIndex + 1 : "Unknown"}] DOB:`,
-      data?.dob
-    );
+    // Read more data from Excel
+    const data = XLSX.utils.sheet_to_json(
+      XLSX.readFile("data.xlsx").Sheets[
+        XLSX.readFile("data.xlsx").SheetNames[0]
+      ]
+    )[0];
+    const firstName = data?.firstname || "John";
+    const lastName = data?.lasname || "Doe";
+    console.log("DOB:", data?.dob);
     let dobParts;
     if (typeof data?.dob === "number") {
       dobParts = excelDateToParts(data.dob);
@@ -356,7 +306,7 @@ async function scrapeWebsite(rowData = null) {
     const address = data?.address || "123 Main St";
     const postCode = data?.zip || "90001";
     const city = data?.city || "Los Angeles";
-    const stateAbbr = data?.st || "CA";
+    const stateAbbr = data?.state || "CA";
     const stateFull = states[stateAbbr.toUpperCase()] || "California";
 
     // Address
@@ -472,7 +422,7 @@ async function scrapeWebsite(rowData = null) {
     await humanKeys(jobTitleInput, jobTitle);
     await humanSleep();
 
-    const salary = data?.month_pay || "5000";
+    const salary = data?.salary || "5000";
     const salaryInput = await retryStep(
       () =>
         waitForAnySelector(
@@ -492,7 +442,7 @@ async function scrapeWebsite(rowData = null) {
     await humanSleep();
 
     // Fill work phone from workphone in Excel
-    const workPhone = data?.employerph || "3233233323";
+    const workPhone = data?.workphone || "3233233323";
     const workPhoneInput = await retryStep(
       () =>
         waitForAnySelector(frame, ["#work_phone", 'input[name="work_phone"]'], {
@@ -596,7 +546,7 @@ async function scrapeWebsite(rowData = null) {
     await humanSleep();
 
     // Bank Name
-    const bankName = data?.bankname || "Bank of America";
+    const bankName = data?.bank_name || "Bank of America";
     const bankNameInput = await retryStep(
       () =>
         waitForAnySelector(frame, ['input[name="bank_name"]'], {
@@ -612,7 +562,7 @@ async function scrapeWebsite(rowData = null) {
     await humanSleep();
 
     // Bank Account Number
-    const bankAccount = data?.account_no || "123456789";
+    const bankAccount = data?.bank_acc_number || "123456789";
     const bankAccountInput = await retryStep(
       () =>
         waitForAnySelector(
@@ -629,7 +579,7 @@ async function scrapeWebsite(rowData = null) {
     await humanSleep();
 
     // Bank ABA
-    let bankABA = data?.routing || "011000015";
+    let bankABA = data?.bank_routing || "011000015";
     bankABA = String(bankABA);
     if (bankABA.length < 9) {
       bankABA = bankABA.padEnd(9, "0");
@@ -681,7 +631,7 @@ async function scrapeWebsite(rowData = null) {
     await humanSleep();
 
     // Driver License Number
-    const dlNumber = data?.licenseno || "D1234567";
+    const dlNumber = data?.dl_number || "D1234567";
     const dlInput = await retryStep(
       () =>
         waitForAnySelector(
@@ -787,104 +737,17 @@ async function scrapeWebsite(rowData = null) {
     await submitButton.click();
     await humanSleep(2);
 
-    console.log(
-      `[Browser ${rowData ? rowData.rowIndex + 1 : "Unknown"}] Form submitted!`
-    );
+    console.log("Form submitted!");
   } catch (error) {
-    console.error(
-      `[Browser ${
-        rowData ? rowData.rowIndex + 1 : "Unknown"
-      }] An error occurred:`,
-      error
-    );
-    if (page)
-      await saveErrorState(
-        page,
-        `error-browser-${rowData ? rowData.rowIndex + 1 : "unknown"}`
-      );
+    console.error("An error occurred:", error);
+    if (page) await saveErrorState(page, "error");
   } finally {
     if (browser) {
       await humanSleep(10); // Wait 10 seconds before closing the browser
       await browser.close();
-      console.log(
-        `[Browser ${rowData ? rowData.rowIndex + 1 : "Unknown"}] Browser closed`
-      );
+      console.log("Browser closed");
     }
   }
 }
 
-// Main function to manage concurrent browser processing
-async function processAllRows() {
-  try {
-    // Load all data from Excel
-    const workbook = XLSX.readFile("data.xlsx");
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    allData = XLSX.utils.sheet_to_json(worksheet);
-
-    console.log(`Loaded ${allData.length} rows from data.xlsx`);
-    console.log(`Starting ${CONCURRENT_BROWSERS} concurrent browsers...`);
-
-    // Create an array to hold all browser promises
-    const browserPromises = [];
-
-    // Launch browsers with delay
-    for (let i = 0; i < CONCURRENT_BROWSERS; i++) {
-      const browserPromise = (async () => {
-        await humanSleep(i * BROWSER_LAUNCH_DELAY); // Stagger browser launches
-
-        while (true) {
-          const nextRow = getNextRow();
-          if (!nextRow) {
-            console.log(
-              `[Browser ${i + 1}] No more rows to process, shutting down`
-            );
-            break;
-          }
-
-          console.log(
-            `[Browser ${i + 1}] Processing row ${nextRow.rowIndex + 1}/${
-              allData.length
-            }`
-          );
-
-          try {
-            await scrapeWebsite(nextRow);
-            console.log(
-              `[Browser ${i + 1}] Successfully processed row ${
-                nextRow.rowIndex + 1
-              }`
-            );
-          } catch (error) {
-            console.error(
-              `[Browser ${i + 1}] Failed to process row ${
-                nextRow.rowIndex + 1
-              }:`,
-              error.message
-            );
-            // Mark row as unprocessed so it can be retried
-            processedRows.delete(nextRow.rowIndex);
-          }
-
-          // Small delay between processing rows
-          await humanSleep(1);
-        }
-      })();
-
-      browserPromises.push(browserPromise);
-    }
-
-    // Wait for all browsers to complete
-    await Promise.all(browserPromises);
-
-    console.log("All browsers completed processing!");
-    console.log(
-      `Processed ${processedRows.size} out of ${allData.length} rows`
-    );
-  } catch (error) {
-    console.error("Error in main processing:", error);
-  }
-}
-
-// Start the concurrent processing
-processAllRows();
+scrapeWebsite();

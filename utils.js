@@ -12,6 +12,7 @@ async function humanKeys(element, text) {
   text = String(text);
   for (const char of text) {
     // Random delay between 300-800ms (0.3-0.8 seconds)
+    await element.focus();
     const delay = Math.floor(Math.random() * 500) + 300;
     await sleep(delay);
     await element.type(char);
